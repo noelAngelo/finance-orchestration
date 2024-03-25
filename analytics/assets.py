@@ -17,6 +17,14 @@ PARTITION_START_DATE = "2023-12-01"
 BUCKET_NAME = EnvVar("S3_FINANCE_DATA_BUCKET").get_value()
 
 
+def _add_metadata(data, object_name):
+    data['_loaded_timestamp'] = arrow.utcnow().isoformat()
+    data['_loaded_date'] = arrow.utcnow().date().isoformat()
+    data['_loaded_time'] = arrow.utcnow().time().isoformat()
+    data['_object_path'] = object_name
+    return data
+
+
 @asset(
     compute_kind="python",
     group_name="collection",
@@ -27,9 +35,9 @@ BUCKET_NAME = EnvVar("S3_FINANCE_DATA_BUCKET").get_value()
     ),
 )
 def collect_up_transactions(
-    context: AssetExecutionContext,
-    up_client: UpBankResource,
-    minio_client: MinIOResource,
+        context: AssetExecutionContext,
+        up_client: UpBankResource,
+        minio_client: MinIOResource,
 ) -> Output[None]:
     """Get Up transactions from the API into the data lake"""
     bounds = context.partition_time_window
@@ -41,6 +49,7 @@ def collect_up_transactions(
             created_date = arrow.get(_["attributes"]["createdAt"])
             created_dt_utc = created_date.to("utc")
             object_name = f"transactions/up/{created_dt_utc.date()}/transactions_{created_dt_utc.date()}_{created_dt_utc.time()}.json"
+            _ = _add_metadata(_, object_name)
             metadata = minio_client.write_to_minio(
                 bucket_name=BUCKET_NAME,
                 object_prefix=object_name,
@@ -52,7 +61,7 @@ def collect_up_transactions(
 
 @asset(compute_kind="python", group_name="collection")
 def collect_up_categories(
-    up_client: UpBankResource, minio_client: MinIOResource
+        up_client: UpBankResource, minio_client: MinIOResource
 ) -> Output[None]:
     """Get Up categories from the API into the data lake"""
     response = up_client.list_categories()
@@ -61,6 +70,7 @@ def collect_up_categories(
     for _ in data:
         category_id = _["id"]
         object_name = f"categories/up/{arrow.utcnow().date()}/{category_id}.json"
+        _ = _add_metadata(_, object_name)
         metadata = minio_client.write_to_minio(
             bucket_name=BUCKET_NAME,
             object_prefix=object_name,
@@ -72,7 +82,7 @@ def collect_up_categories(
 
 @asset(compute_kind="python", group_name="collection")
 def collect_up_accounts(
-    up_client: UpBankResource, minio_client: MinIOResource
+        up_client: UpBankResource, minio_client: MinIOResource
 ) -> Output[None]:
     """Get Up categories from the API into the data lake"""
     accounts = up_client.list_accounts()
@@ -82,6 +92,7 @@ def collect_up_accounts(
         for data in payload["data"]:
             account_id = data["id"]
             object_name = f"accounts/up/{arrow.utcnow().date()}/{account_id}.json"
+            data = _add_metadata(data, object_name)
             metadata = minio_client.write_to_minio(
                 bucket_name=BUCKET_NAME,
                 object_prefix=object_name,
@@ -101,8 +112,7 @@ def raw_up_transactions(duckdb_client: DuckDBResource):
     """Ingest Up transactions in DuckDB for further processing"""
     statement = f"""
     SELECT
-        *,
-        get_current_timestamp() as _loaded_timestamp
+        *
     FROM read_json_auto('s3://{BUCKET_NAME}/transactions/up/**/*.json')
     """
     return duckdb_client.create_table(statement, "raw_up_transactions")
@@ -118,8 +128,7 @@ def raw_up_categories(duckdb_client: DuckDBResource):
     """Ingest Up categories in DuckDB for further processing"""
     statement = f"""
         SELECT
-            *,
-            get_current_timestamp() as _loaded_timestamp
+            *
         FROM read_json_auto('s3://{BUCKET_NAME}/categories/up/**/*.json')
         """
     return duckdb_client.create_table(statement, "raw_up_categories")
@@ -135,8 +144,7 @@ def raw_up_accounts(duckdb_client: DuckDBResource):
     """Ingest Up accounts in DuckDB for further processing"""
     statement = f"""
             SELECT
-                *,
-                get_current_timestamp() as _loaded_timestamp
+                *
             FROM read_json_auto('s3://{BUCKET_NAME}/accounts/up/**/*.json')
             """
     return duckdb_client.create_table(statement, "raw_up_accounts")
